@@ -1,0 +1,14 @@
+schema:
+  - protocol/aggregation.graphqls
+  - protocol/alarm.graphqls
+  - protocol/common.graphqls
+  - protocol/log.graphqls
+  - protocol/metadata.graphqls
+  - protocol/metric.graphqls
+  - protocol/top-n-records.graphqls
+  - protocol/topology.graphqls
+  - protocol/trace.graphqls
+exec:
+  filename: generated.go
+model:
+  filename: models_gen.go
