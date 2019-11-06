@@ -1,346 +1,732 @@
 package client
 
 import (
-	"errors"
-
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/relay"
-	"golang.org/x/net/context"
+	"fmt"
+	"io"
+	"strconv"
 )
 
-/**
- * This is a basic end-to-end test, designed to demonstrate the various
- * capabilities of a Relay-compliant GraphQL server.
- *
- * It is recommended that readers of this test be familiar with
- * the end-to-end test in GraphQL.js first, as this test skips
- * over the basics covered there in favor of illustrating the
- * key aspects of the Relay spec that this test is designed to illustrate.
- *
- * We will create a GraphQL schema that describes the major
- * factions and ships in the original Star Wars trilogy.
- *
- * NOTE: This may contain spoilers for the original Star
- * Wars trilogy.
- */
+type AlarmMessage struct {
+	StartTime int64  `json:"startTime"`
+	Scope     *Scope `json:"scope"`
+	ID        string `json:"id"`
+	Message   string `json:"message"`
+}
 
-/**
- * Using our shorthand to describe type systems, the type system for our
- * example will be the following:
- *
- * interface Node {
- *   id: ID!
- * }
- *
- * type Faction : Node {
- *   id: ID!
- *   name: String
- *   ships: ShipConnection
- * }
- *
- * type Ship : Node {
- *   id: ID!
- *   name: String
- * }
- *
- * type ShipConnection {
- *   edges: [ShipEdge]
- *   pageInfo: PageInfo!
- * }
- *
- * type ShipEdge {
- *   cursor: String!
- *   node: Ship
- * }
- *
- * type PageInfo {
- *   hasNextPage: Boolean!
- *   hasPreviousPage: Boolean!
- *   startCursor: String
- *   endCursor: String
- * }
- *
- * type Query {
- *   rebels: Faction
- *   empire: Faction
- *   node(id: ID!): Node
- * }
- *
- * input IntroduceShipInput {
- *   clientMutationID: string!
- *   shipName: string!
- *   factionId: ID!
- * }
- *
- * input IntroduceShipPayload {
- *   clientMutationID: string!
- *   ship: Ship
- *   faction: Faction
- * }
- *
- * type Mutation {
- *   introduceShip(input IntroduceShipInput!): IntroduceShipPayload
- * }
- */
+type AlarmTrend struct {
+	NumOfAlarm []*int `json:"numOfAlarm"`
+}
 
-// declare definitions first, and initialize them in init() to break `initialization loop`
-// i.e.:
-// - nodeDefinitions refers to
-// - shipType refers to
-// - nodeDefinitions
+type Alarms struct {
+	Msgs  []*AlarmMessage `json:"msgs"`
+	Total int             `json:"total"`
+}
 
-var nodeDefinitions *relay.NodeDefinitions
-var shipType *graphql.Object
-var factionType *graphql.Object
+type Attribute struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
 
-// exported schema, defined in init()
-var Schema graphql.Schema
+type BasicTrace struct {
+	SegmentID     string   `json:"segmentId"`
+	EndpointNames []string `json:"endpointNames"`
+	Duration      int      `json:"duration"`
+	Start         string   `json:"start"`
+	IsError       *bool    `json:"isError"`
+	TraceIds      []string `json:"traceIds"`
+}
 
-func init() {
+type BatchMetricConditions struct {
+	Name string   `json:"name"`
+	Ids  []string `json:"ids"`
+}
 
-	/**
-	 * We get the node interface and field from the relay library.
-	 *
-	 * The first method is the way we resolve an ID to its object. The second is the
-	 * way we resolve an object that implements node to its type.
-	 */
-	nodeDefinitions = relay.NewNodeDefinitions(relay.NodeDefinitionsConfig{
-		IDFetcher: func(id string, info graphql.ResolveInfo, ctx context.Context) (interface{}, error) {
-			// resolve id from global id
-			resolvedID := relay.FromGlobalID(id)
+type Call struct {
+	Source           string        `json:"source"`
+	SourceComponents []string      `json:"sourceComponents"`
+	Target           string        `json:"target"`
+	TargetComponents []string      `json:"targetComponents"`
+	ID               string        `json:"id"`
+	DetectPoints     []DetectPoint `json:"detectPoints"`
+}
 
-			// based on id and its type, return the object
-			switch resolvedID.Type {
-			case "Faction":
-				return GetFaction(resolvedID.ID), nil
-			case "Ship":
-				return GetShip(resolvedID.ID), nil
-			default:
-				return nil, errors.New("Unknown node type")
-			}
-		},
-		TypeResolve: func(p graphql.ResolveTypeParams) *graphql.Object {
-			// based on the type of the value, return GraphQLObjectType
-			switch p.Value.(type) {
-			case *Faction:
-				return factionType
-			default:
-				return shipType
-			}
-		},
-	})
+type ClusterBrief struct {
+	NumOfService  int `json:"numOfService"`
+	NumOfEndpoint int `json:"numOfEndpoint"`
+	NumOfDatabase int `json:"numOfDatabase"`
+	NumOfCache    int `json:"numOfCache"`
+	NumOfMq       int `json:"numOfMQ"`
+}
 
-	/**
-	 * We define our basic ship type.
-	 *
-	 * This implements the following type system shorthand:
-	 *   type Ship : Node {
-	 *     id: String!
-	 *     name: String
-	 *   }
-	 */
-	shipType = graphql.NewObject(graphql.ObjectConfig{
-		Name:        "Ship",
-		Description: "A ship in the Star Wars saga",
-		Fields: graphql.Fields{
-			"id": relay.GlobalIDField("Ship", nil),
-			"name": &graphql.Field{
-				Type:        graphql.String,
-				Description: "The name of the ship.",
-			},
-		},
-		Interfaces: []*graphql.Interface{
-			nodeDefinitions.NodeInterface,
-		},
-	})
+type Database struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
 
-	/**
-	 * We define a connection between a faction and its ships.
-	 *
-	 * connectionType implements the following type system shorthand:
-	 *   type ShipConnection {
-	 *     edges: [ShipEdge]
-	 *     pageInfo: PageInfo!
-	 *   }
-	 *
-	 * connectionType has an edges field - a list of edgeTypes that implement the
-	 * following type system shorthand:
-	 *   type ShipEdge {
-	 *     cursor: String!
-	 *     node: Ship
-	 *   }
-	 */
-	shipConnectionDefinition := relay.ConnectionDefinitions(relay.ConnectionConfig{
-		Name:     "Ship",
-		NodeType: shipType,
-	})
+type Duration struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+	Step  Step   `json:"step"`
+}
 
-	/**
-	 * We define our faction type, which implements the node interface.
-	 *
-	 * This implements the following type system shorthand:
-	 *   type Faction : Node {
-	 *     id: String!
-	 *     name: String
-	 *     ships: ShipConnection
-	 *   }
-	 */
-	factionType = graphql.NewObject(graphql.ObjectConfig{
-		Name:        "Faction",
-		Description: "A faction in the Star Wars saga",
-		Fields: graphql.Fields{
-			"id": relay.GlobalIDField("Faction", nil),
-			"name": &graphql.Field{
-				Type:        graphql.String,
-				Description: "The name of the faction.",
-			},
-			"ships": &graphql.Field{
-				Type: shipConnectionDefinition.ConnectionType,
-				Args: relay.ConnectionArgs,
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					// convert args map[string]interface into ConnectionArguments
-					args := relay.NewConnectionArguments(p.Args)
+type Endpoint struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 
-					// get ship objects from current faction
-					ships := []interface{}{}
-					if faction, ok := p.Source.(*Faction); ok {
-						for _, shipId := range faction.Ships {
-							ships = append(ships, GetShip(shipId))
-						}
-					}
-					// let relay library figure out the result, given
-					// - the list of ships for this faction
-					// - and the filter arguments (i.e. first, last, after, before)
-					return relay.ConnectionFromArray(ships, args), nil
-				},
-			},
-		},
-		Interfaces: []*graphql.Interface{
-			nodeDefinitions.NodeInterface,
-		},
-	})
+type EndpointInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ServiceID   string `json:"serviceId"`
+	ServiceName string `json:"serviceName"`
+}
 
-	/**
-	 * This is the type that will be the root of our query, and the
-	 * entry point into our schema.
-	 *
-	 * This implements the following type system shorthand:
-	 *   type Query {
-	 *     rebels: Faction
-	 *     empire: Faction
-	 *     node(id: String!): Node
-	 *   }
-	 */
-	queryType := graphql.NewObject(graphql.ObjectConfig{
-		Name: "Query",
-		Fields: graphql.Fields{
-			"rebels": &graphql.Field{
-				Type: factionType,
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					return GetRebels(), nil
-				},
-			},
-			"empire": &graphql.Field{
-				Type: factionType,
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					return GetEmpire(), nil
-				},
-			},
-			"node": nodeDefinitions.NodeField,
-		},
-	})
+type IntValues struct {
+	Values []*KVInt `json:"values"`
+}
 
-	/**
-	 * This will return a GraphQLField for our ship
-	 * mutation.
-	 *
-	 * It creates these two types implicitly:
-	 *   input IntroduceShipInput {
-	 *     clientMutationID: string!
-	 *     shipName: string!
-	 *     factionId: ID!
-	 *   }
-	 *
-	 *   input IntroduceShipPayload {
-	 *     clientMutationID: string!
-	 *     ship: Ship
-	 *     faction: Faction
-	 *   }
-	 */
-	shipMutation := relay.MutationWithClientMutationID(relay.MutationConfig{
-		Name: "IntroduceShip",
-		InputFields: graphql.InputObjectConfigFieldMap{
-			"shipName": &graphql.InputObjectFieldConfig{
-				Type: graphql.NewNonNull(graphql.String),
-			},
-			"factionId": &graphql.InputObjectFieldConfig{
-				Type: graphql.NewNonNull(graphql.ID),
-			},
-		},
-		OutputFields: graphql.Fields{
-			"ship": &graphql.Field{
-				Type: shipType,
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if payload, ok := p.Source.(map[string]interface{}); ok {
-						return GetShip(payload["shipId"].(string)), nil
-					}
-					return nil, nil
-				},
-			},
-			"faction": &graphql.Field{
-				Type: factionType,
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if payload, ok := p.Source.(map[string]interface{}); ok {
-						return GetFaction(payload["factionId"].(string)), nil
-					}
-					return nil, nil
-				},
-			},
-		},
-		MutateAndGetPayload: func(inputMap map[string]interface{}, info graphql.ResolveInfo, ctx context.Context) (map[string]interface{}, error) {
-			// `inputMap` is a map with keys/fields as specified in `InputFields`
-			// Note, that these fields were specified as non-nullables, so we can assume that it exists.
-			shipName := inputMap["shipName"].(string)
-			factionId := inputMap["factionId"].(string)
+type KVInt struct {
+	ID    string `json:"id"`
+	Value int64  `json:"value"`
+}
 
-			// This mutation involves us creating (introducing) a new ship
-			newShip := CreateShip(shipName, factionId)
-			// return payload
-			return map[string]interface{}{
-				"shipId":    newShip.ID,
-				"factionId": factionId,
-			}, nil
-		},
-	})
+type KeyValue struct {
+	Key   string  `json:"key"`
+	Value *string `json:"value"`
+}
 
-	/**
-	 * This is the type that will be the root of our mutations, and the
-	 * entry point into performing writes in our schema.
-	 *
-	 * This implements the following type system shorthand:
-	 *   type Mutation {
-	 *     introduceShip(input IntroduceShipInput!): IntroduceShipPayload
-	 *   }
-	 */
+type Log struct {
+	ServiceName         *string     `json:"serviceName"`
+	ServiceID           *string     `json:"serviceId"`
+	ServiceInstanceName *string     `json:"serviceInstanceName"`
+	ServiceInstanceID   *string     `json:"serviceInstanceId"`
+	EndpointName        *string     `json:"endpointName"`
+	EndpointID          *string     `json:"endpointId"`
+	TraceID             *string     `json:"traceId"`
+	Timestamp           string      `json:"timestamp"`
+	IsError             *bool       `json:"isError"`
+	StatusCode          *string     `json:"statusCode"`
+	ContentType         ContentType `json:"contentType"`
+	Content             *string     `json:"content"`
+}
 
-	mutationType := graphql.NewObject(graphql.ObjectConfig{
-		Name: "Mutation",
-		Fields: graphql.Fields{
-			"introduceShip": shipMutation,
-		},
-	})
+type LogEntity struct {
+	Time int64       `json:"time"`
+	Data []*KeyValue `json:"data"`
+}
 
-	/**
-	 * Finally, we construct our schema (whose starting query type is the query
-	 * type we defined above) and export it.
-	 */
-	var err error
-	Schema, err = graphql.NewSchema(graphql.SchemaConfig{
-		Query:    queryType,
-		Mutation: mutationType,
-	})
-	if err != nil {
-		// panic if there is an error in schema
-		panic(err)
+type LogQueryCondition struct {
+	MetricName        *string     `json:"metricName"`
+	ServiceID         *string     `json:"serviceId"`
+	ServiceInstanceID *string     `json:"serviceInstanceId"`
+	EndpointID        *string     `json:"endpointId"`
+	TraceID           *string     `json:"traceId"`
+	QueryDuration     *Duration   `json:"queryDuration"`
+	State             LogState    `json:"state"`
+	StateCode         *string     `json:"stateCode"`
+	Paging            *Pagination `json:"paging"`
+}
+
+type Logs struct {
+	Logs  []*Log `json:"logs"`
+	Total int    `json:"total"`
+}
+
+type MetricCondition struct {
+	Name string  `json:"name"`
+	ID   *string `json:"id"`
+}
+
+type Node struct {
+	ID     string  `json:"id"`
+	Name   string  `json:"name"`
+	Type   *string `json:"type"`
+	IsReal bool    `json:"isReal"`
+}
+
+type Pagination struct {
+	PageNum   *int  `json:"pageNum"`
+	PageSize  int   `json:"pageSize"`
+	NeedTotal *bool `json:"needTotal"`
+}
+
+type Ref struct {
+	TraceID         string  `json:"traceId"`
+	ParentSegmentID string  `json:"parentSegmentId"`
+	ParentSpanID    int     `json:"parentSpanId"`
+	Type            RefType `json:"type"`
+}
+
+type Service struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type ServiceInstance struct {
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	Attributes   []*Attribute `json:"attributes"`
+	Language     Language     `json:"language"`
+	InstanceUUID string       `json:"instanceUUID"`
+}
+
+type Span struct {
+	TraceID      string       `json:"traceId"`
+	SegmentID    string       `json:"segmentId"`
+	SpanID       int          `json:"spanId"`
+	ParentSpanID int          `json:"parentSpanId"`
+	Refs         []*Ref       `json:"refs"`
+	ServiceCode  string       `json:"serviceCode"`
+	StartTime    int64        `json:"startTime"`
+	EndTime      int64        `json:"endTime"`
+	EndpointName *string      `json:"endpointName"`
+	Type         string       `json:"type"`
+	Peer         *string      `json:"peer"`
+	Component    *string      `json:"component"`
+	IsError      *bool        `json:"isError"`
+	Layer        *string      `json:"layer"`
+	Tags         []*KeyValue  `json:"tags"`
+	Logs         []*LogEntity `json:"logs"`
+}
+
+type Thermodynamic struct {
+	Nodes     [][]*int `json:"nodes"`
+	AxisYStep int      `json:"axisYStep"`
+}
+
+type TimeInfo struct {
+	Timezone         *string `json:"timezone"`
+	CurrentTimestamp *int64  `json:"currentTimestamp"`
+}
+
+type TopNEntity struct {
+	Name  string `json:"name"`
+	ID    string `json:"id"`
+	Value int64  `json:"value"`
+}
+
+type TopNRecord struct {
+	Statement *string `json:"statement"`
+	Latency   int64   `json:"latency"`
+	TraceID   *string `json:"traceId"`
+}
+
+type TopNRecordsCondition struct {
+	ServiceID  string    `json:"serviceId"`
+	MetricName string    `json:"metricName"`
+	TopN       int       `json:"topN"`
+	Order      Order     `json:"order"`
+	Duration   *Duration `json:"duration"`
+}
+
+type Topology struct {
+	Nodes []*Node `json:"nodes"`
+	Calls []*Call `json:"calls"`
+}
+
+type Trace struct {
+	Spans []*Span `json:"spans"`
+}
+
+type TraceBrief struct {
+	Traces []*BasicTrace `json:"traces"`
+	Total  int           `json:"total"`
+}
+
+type TraceQueryCondition struct {
+	ServiceID         *string     `json:"serviceId"`
+	ServiceInstanceID *string     `json:"serviceInstanceId"`
+	TraceID           *string     `json:"traceId"`
+	EndpointID        *string     `json:"endpointId"`
+	EndpointName      *string     `json:"endpointName"`
+	QueryDuration     *Duration   `json:"queryDuration"`
+	MinTraceDuration  *int        `json:"minTraceDuration"`
+	MaxTraceDuration  *int        `json:"maxTraceDuration"`
+	TraceState        TraceState  `json:"traceState"`
+	QueryOrder        QueryOrder  `json:"queryOrder"`
+	Paging            *Pagination `json:"paging"`
+}
+
+type ContentType string
+
+const (
+	ContentTypeText ContentType = "TEXT"
+	ContentTypeJSON ContentType = "JSON"
+	ContentTypeNone ContentType = "NONE"
+)
+
+var AllContentType = []ContentType{
+	ContentTypeText,
+	ContentTypeJSON,
+	ContentTypeNone,
+}
+
+func (e ContentType) IsValid() bool {
+	switch e {
+	case ContentTypeText, ContentTypeJSON, ContentTypeNone:
+		return true
 	}
+	return false
+}
+
+func (e ContentType) String() string {
+	return string(e)
+}
+
+func (e *ContentType) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ContentType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ContentType", str)
+	}
+	return nil
+}
+
+func (e ContentType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type DetectPoint string
+
+const (
+	DetectPointClient DetectPoint = "CLIENT"
+	DetectPointServer DetectPoint = "SERVER"
+	DetectPointProxy  DetectPoint = "PROXY"
+)
+
+var AllDetectPoint = []DetectPoint{
+	DetectPointClient,
+	DetectPointServer,
+	DetectPointProxy,
+}
+
+func (e DetectPoint) IsValid() bool {
+	switch e {
+	case DetectPointClient, DetectPointServer, DetectPointProxy:
+		return true
+	}
+	return false
+}
+
+func (e DetectPoint) String() string {
+	return string(e)
+}
+
+func (e *DetectPoint) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = DetectPoint(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid DetectPoint", str)
+	}
+	return nil
+}
+
+func (e DetectPoint) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type Language string
+
+const (
+	LanguageUnknown Language = "UNKNOWN"
+	LanguageJava    Language = "JAVA"
+	LanguageDotnet  Language = "DOTNET"
+	LanguageNodejs  Language = "NODEJS"
+	LanguagePython  Language = "PYTHON"
+	LanguageRuby    Language = "RUBY"
+)
+
+var AllLanguage = []Language{
+	LanguageUnknown,
+	LanguageJava,
+	LanguageDotnet,
+	LanguageNodejs,
+	LanguagePython,
+	LanguageRuby,
+}
+
+func (e Language) IsValid() bool {
+	switch e {
+	case LanguageUnknown, LanguageJava, LanguageDotnet, LanguageNodejs, LanguagePython, LanguageRuby:
+		return true
+	}
+	return false
+}
+
+func (e Language) String() string {
+	return string(e)
+}
+
+func (e *Language) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = Language(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid Language", str)
+	}
+	return nil
+}
+
+func (e Language) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type LogState string
+
+const (
+	LogStateAll     LogState = "ALL"
+	LogStateSuccess LogState = "SUCCESS"
+	LogStateError   LogState = "ERROR"
+)
+
+var AllLogState = []LogState{
+	LogStateAll,
+	LogStateSuccess,
+	LogStateError,
+}
+
+func (e LogState) IsValid() bool {
+	switch e {
+	case LogStateAll, LogStateSuccess, LogStateError:
+		return true
+	}
+	return false
+}
+
+func (e LogState) String() string {
+	return string(e)
+}
+
+func (e *LogState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = LogState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid LogState", str)
+	}
+	return nil
+}
+
+func (e LogState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type NodeType string
+
+const (
+	NodeTypeService  NodeType = "SERVICE"
+	NodeTypeEndpoint NodeType = "ENDPOINT"
+	NodeTypeUser     NodeType = "USER"
+)
+
+var AllNodeType = []NodeType{
+	NodeTypeService,
+	NodeTypeEndpoint,
+	NodeTypeUser,
+}
+
+func (e NodeType) IsValid() bool {
+	switch e {
+	case NodeTypeService, NodeTypeEndpoint, NodeTypeUser:
+		return true
+	}
+	return false
+}
+
+func (e NodeType) String() string {
+	return string(e)
+}
+
+func (e *NodeType) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = NodeType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid NodeType", str)
+	}
+	return nil
+}
+
+func (e NodeType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type Order string
+
+const (
+	OrderAsc Order = "ASC"
+	OrderDes Order = "DES"
+)
+
+var AllOrder = []Order{
+	OrderAsc,
+	OrderDes,
+}
+
+func (e Order) IsValid() bool {
+	switch e {
+	case OrderAsc, OrderDes:
+		return true
+	}
+	return false
+}
+
+func (e Order) String() string {
+	return string(e)
+}
+
+func (e *Order) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = Order(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid Order", str)
+	}
+	return nil
+}
+
+func (e Order) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type QueryOrder string
+
+const (
+	QueryOrderByStartTime QueryOrder = "BY_START_TIME"
+	QueryOrderByDuration  QueryOrder = "BY_DURATION"
+)
+
+var AllQueryOrder = []QueryOrder{
+	QueryOrderByStartTime,
+	QueryOrderByDuration,
+}
+
+func (e QueryOrder) IsValid() bool {
+	switch e {
+	case QueryOrderByStartTime, QueryOrderByDuration:
+		return true
+	}
+	return false
+}
+
+func (e QueryOrder) String() string {
+	return string(e)
+}
+
+func (e *QueryOrder) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = QueryOrder(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid QueryOrder", str)
+	}
+	return nil
+}
+
+func (e QueryOrder) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type RefType string
+
+const (
+	RefTypeCrossProcess RefType = "CROSS_PROCESS"
+	RefTypeCrossThread  RefType = "CROSS_THREAD"
+)
+
+var AllRefType = []RefType{
+	RefTypeCrossProcess,
+	RefTypeCrossThread,
+}
+
+func (e RefType) IsValid() bool {
+	switch e {
+	case RefTypeCrossProcess, RefTypeCrossThread:
+		return true
+	}
+	return false
+}
+
+func (e RefType) String() string {
+	return string(e)
+}
+
+func (e *RefType) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = RefType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid RefType", str)
+	}
+	return nil
+}
+
+func (e RefType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type Scope string
+
+const (
+	ScopeService                 Scope = "Service"
+	ScopeServiceInstance         Scope = "ServiceInstance"
+	ScopeEndpoint                Scope = "Endpoint"
+	ScopeServiceRelation         Scope = "ServiceRelation"
+	ScopeServiceInstanceRelation Scope = "ServiceInstanceRelation"
+	ScopeEndpointRelation        Scope = "EndpointRelation"
+)
+
+var AllScope = []Scope{
+	ScopeService,
+	ScopeServiceInstance,
+	ScopeEndpoint,
+	ScopeServiceRelation,
+	ScopeServiceInstanceRelation,
+	ScopeEndpointRelation,
+}
+
+func (e Scope) IsValid() bool {
+	switch e {
+	case ScopeService, ScopeServiceInstance, ScopeEndpoint, ScopeServiceRelation, ScopeServiceInstanceRelation, ScopeEndpointRelation:
+		return true
+	}
+	return false
+}
+
+func (e Scope) String() string {
+	return string(e)
+}
+
+func (e *Scope) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = Scope(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid Scope", str)
+	}
+	return nil
+}
+
+func (e Scope) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type Step string
+
+const (
+	StepMonth  Step = "MONTH"
+	StepDay    Step = "DAY"
+	StepHour   Step = "HOUR"
+	StepMinute Step = "MINUTE"
+	StepSecond Step = "SECOND"
+)
+
+var AllStep = []Step{
+	StepMonth,
+	StepDay,
+	StepHour,
+	StepMinute,
+	StepSecond,
+}
+
+func (e Step) IsValid() bool {
+	switch e {
+	case StepMonth, StepDay, StepHour, StepMinute, StepSecond:
+		return true
+	}
+	return false
+}
+
+func (e Step) String() string {
+	return string(e)
+}
+
+func (e *Step) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = Step(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid Step", str)
+	}
+	return nil
+}
+
+func (e Step) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type TraceState string
+
+const (
+	TraceStateAll     TraceState = "ALL"
+	TraceStateSuccess TraceState = "SUCCESS"
+	TraceStateError   TraceState = "ERROR"
+)
+
+var AllTraceState = []TraceState{
+	TraceStateAll,
+	TraceStateSuccess,
+	TraceStateError,
+}
+
+func (e TraceState) IsValid() bool {
+	switch e {
+	case TraceStateAll, TraceStateSuccess, TraceStateError:
+		return true
+	}
+	return false
+}
+
+func (e TraceState) String() string {
+	return string(e)
+}
+
+func (e *TraceState) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = TraceState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid TraceState", str)
+	}
+	return nil
+}
+
+func (e TraceState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
 }
